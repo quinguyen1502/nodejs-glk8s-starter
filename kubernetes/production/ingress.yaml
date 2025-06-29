@@ -1,16 +1,16 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: production-starter-ingress
+  name: your-app-ingress
 spec:
   rules:
-  - host: production-starter.local
+  - host: your-app-domain.com
     http:
       paths:
       - path: /
         pathType: Prefix
         backend:
           service:
-            name: production-starter-service
+            name: your-app-service
             port:
               number: 80

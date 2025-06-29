@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: production-starter
+  name: your-app
   labels:
-    app: production-starter
-  namespace: default
+    app: your-app
+  namespace: production
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: production-starter
+      app: your-app
   template:
     metadata:
       labels:
-        app: production-starter
+        app: your-app
     spec:
       imagePullSecrets:
       - name: gitlab-registry-secret
       containers:
-      - name: production-starter-container
+      - name: your-app-container
         image: __IMAGE_NAME_PLACEHOLDER__:__IMAGE_TAG_PLACEHOLDER__
         ports:
         - containerPort: 3000

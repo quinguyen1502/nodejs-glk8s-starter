@@ -4,8 +4,8 @@ stages:
   - lint   # Code linting and quality checks.
   - test   # Automated unit and integration tests.
   - build  # Building artifacts, in this case, a Docker image.
-  - deploy # Deploying the application to a target environment.
-           # We're not automating the deployment step entirely here, but it can be extended.
+  - deploy_dev # Deploying the application to the develoment environment.
+  - deploy_prod # Deploying the application to the production environment.
 
 # Define the default Docker image for all jobs if not specified individually.
 # 'node:lts-alpine' is a lightweight Node.js image suitable for many JavaScript projects.
@@ -70,7 +70,7 @@ build_docker_image:
     - name: docker:dind
       # Command to start the Docker daemon, with a specific insecure registry argument.
       # Use `--insecure-registry` with caution, typically for local or trusted network registries.
-      # command: ["--insecure-registry=[GITLAB_DOMAIN]:5050"]
+      # command: ["--insecure-registry=your-gitlab-domain.com:5050"]
   variables:
     # Environment variables to configure Docker operations.
 
@@ -135,8 +135,8 @@ build_docker_image:
 # Stage 4.1: Deploy to Development Kubernetes
 # Deploys the built Docker image to a Kubernetes cluster using a GitLab Agent.
 # ====================================
-deploy-to-development:
-  stage: deploy # Assigns this job to the 'deploy' stage.
+deploy_to_dev:
+  stage: deploy_dev # Assigns this job to the 'deploy_dev' stage.
   image:
     name: bitnami/kubectl:latest # Uses a lightweight image with kubectl installed.
     entrypoint: [""]             # Overrides the default entrypoint to allow direct command execution.
@@ -144,10 +144,10 @@ deploy-to-development:
     # Variables for Kubernetes deployment.
     DOCKER_IMAGE_NAME: $CI_REGISTRY/$CI_PROJECT_PATH # Base Docker image name.
     DOCKER_IMAGE_TAG: $CI_COMMIT_SHORT_SHA         # Tag to use for the deployed image (short commit SHA for uniqueness).
-    KUBE_NAMESPACE: default                          # Kubernetes namespace to deploy into.
-    KUBE_AGENT_CONTEXT: "my-project/starter:development-agent" # Context name for the Kubernetes agent.
+    KUBE_NAMESPACE: development                          # Kubernetes namespace to deploy into.
+    KUBE_AGENT_CONTEXT: "your-project/your-app:development-agent" # Context name for the Kubernetes agent.
     AGENT_ID: 1                                      # ID of the GitLab Kubernetes Agent.
-    K8S_PROXY_URL: https://[GITLAB_DOMAIN]/-/kubernetes-agent/k8s-proxy/ # URL for the Kubernetes API proxy via the GitLab Agent.
+    K8S_PROXY_URL: https://your-gitlab-domain.com/-/kubernetes-agent/k8s-proxy/ # URL for the Kubernetes API proxy via the GitLab Agent.
   before_script:
     # Commands to run before the main script, typically for setup.
     # Configure kubectl to authenticate with the GitLab Agent.
@@ -172,8 +172,11 @@ deploy-to-development:
     - kubectl apply -f kubernetes/development/ingress.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
     - echo "Waiting for Deployment rollout to complete..."
     # Wait for the Kubernetes deployment to be successfully rolled out.
-    - kubectl rollout status deployment/development-starter -n $KUBE_NAMESPACE
-    - echo "Deployment completed successfully for deployment/development-starter in namespace $KUBE_NAMESPACE."
+    - kubectl rollout status deployment/your-app -n $KUBE_NAMESPACE
+    - echo "Deployment completed successfully for deployment/your-app in namespace $KUBE_NAMESPACE."
+  environment:
+    name: development
+    url: https://dev.your-app-domain.com
   rules:
     # Only run this job when changes are pushed to the default branch (e.g., 'main' or 'master').
     # This typically means automatic deployment on successful merges to the main development line.
@@ -186,8 +189,8 @@ deploy-to-development:
 # Stage 4.2: Deploy to Production Kubernetes
 # Deploys the built Docker image to a Kubernetes cluster using a GitLab Agent.
 # ====================================
-deploy-to-production:
-  stage: deploy # Assigns this job to the 'deploy' stage.
+deploy_to_prod:
+  stage: deploy_prod # Assigns this job to the 'deploy_prod' stage.
   image:
     name: bitnami/kubectl:latest # Uses a lightweight image with kubectl installed.
     entrypoint: [""]             # Overrides the default entrypoint to allow direct command execution.
@@ -195,10 +198,10 @@ deploy-to-production:
     # Variables for Kubernetes deployment.
     DOCKER_IMAGE_NAME: $CI_REGISTRY/$CI_PROJECT_PATH # Base Docker image name.
     DOCKER_IMAGE_TAG: $CI_COMMIT_SHORT_SHA         # Tag to use for the deployed image (short commit SHA for uniqueness).
-    KUBE_NAMESPACE: default                          # Kubernetes namespace to deploy into.
-    KUBE_AGENT_CONTEXT: "my-project/starter:production-agent" # Context name for the Kubernetes agent.
+    KUBE_NAMESPACE: production                          # Kubernetes namespace to deploy into.
+    KUBE_AGENT_CONTEXT: "your-project/your-app:production-agent" # Context name for the Kubernetes agent.
     AGENT_ID: 1                                      # ID of the GitLab Kubernetes Agent.
-    K8S_PROXY_URL: https://[GITLAB_DOMAIN]/-/kubernetes-agent/k8s-proxy/ # URL for the Kubernetes API proxy via the GitLab Agent.
+    K8S_PROXY_URL: https://your-gitlab-domain.com/-/kubernetes-agent/k8s-proxy/ # URL for the Kubernetes API proxy via the GitLab Agent.
   before_script:
     # Commands to run before the main script, typically for setup.
     # Configure kubectl to authenticate with the GitLab Agent.
@@ -223,10 +226,15 @@ deploy-to-production:
     - kubectl apply -f kubernetes/production/ingress.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
     - echo "Waiting for Deployment rollout to complete..."
     # Wait for the Kubernetes deployment to be successfully rolled out.
-    - kubectl rollout status deployment/production-starter -n $KUBE_NAMESPACE
-    - echo "Deployment completed successfully for deployment/production-starter in namespace $KUBE_NAMESPACE."
+    - kubectl rollout status deployment/your-app -n $KUBE_NAMESPACE
+    - echo "Deployment completed successfully for deployment/your-app in namespace $KUBE_NAMESPACE."
+  environment:
+    name: production
+    url: https://your-app-domain.com
   rules:
     # Only run this job when changes are pushed to the default branch (e.g., 'main' or 'master').
     # This typically means automatic deployment on successful merges to the main development line.
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH # Default branch is usually 'main' or 'master'.
-      when: on_success
+      when: manual
+      allow_failure: fail # Allows this job to fail without stopping the pipeline.
+      protected: true # Ensures this job only runs on protected branches.

@@ -1,8 +1,8 @@
 ci_access:
   projects:
-    - id: "1"
+    - id: "your-agent-id"
 gitops:
   manifest_projects:
-    - id: "1"
+    - id: "your-agent-id"
       paths:
         - glob: '/kubernetes/development/*.yaml'
