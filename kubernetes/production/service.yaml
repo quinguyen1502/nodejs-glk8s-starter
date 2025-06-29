@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: production-starter-service
+spec:
+  selector:
+    app: production-starter
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: ClusterIP

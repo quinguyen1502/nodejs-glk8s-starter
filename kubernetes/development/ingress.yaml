@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: development-starter-ingress
+spec:
+  rules:
+  - host: development-starter.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: development-starter-service
+            port:
+              number: 80

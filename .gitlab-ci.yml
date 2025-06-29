@@ -1,0 +1,232 @@
+# Define the stages (phases) of the pipeline.
+# Each stage contains one or more jobs that run in parallel.
+stages:
+  - lint   # Code linting and quality checks.
+  - test   # Automated unit and integration tests.
+  - build  # Building artifacts, in this case, a Docker image.
+  - deploy # Deploying the application to a target environment.
+           # We're not automating the deployment step entirely here, but it can be extended.
+
+# Define the default Docker image for all jobs if not specified individually.
+# 'node:lts-alpine' is a lightweight Node.js image suitable for many JavaScript projects.
+default:
+  image: node:lts-alpine
+
+---
+
+# ====================================
+# Stage 1: Linting
+# Checks code formatting and quality.
+# ====================================
+lint_code:
+  stage: lint # Assigns this job to the 'lint' stage.
+  script:
+    - echo "Running ESLint for code quality check..."
+    - npm install eslint # Installs ESLint if not already present in node_modules.
+    - npm run lint       # Executes the 'lint' script defined in package.json.
+  # Rules define when this job should run.
+  rules:
+    # Run this job on successful completion for changes pushed to 'main' or 'master' branches.
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"
+      when: on_success
+    # Run this job on successful completion when a merge request event triggers the pipeline.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: on_success
+  allow_failure: true # Allows this job to fail without stopping the entire pipeline.
+                      # Useful for non-critical checks that shouldn't block deployment.
+
+---
+
+# ====================================
+# Stage 2: Testing
+# Runs automated tests.
+# ====================================
+run_tests:
+  stage: test # Assigns this job to the 'test' stage.
+  script:
+    - echo "Running tests..."
+    - npm install # Ensures all dependencies (including devDependencies) are installed.
+    - npm test    # Executes the 'test' script defined in package.json.
+  rules:
+    # Run this job on successful completion for changes pushed to 'main' or 'master' branches.
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"
+      when: on_success
+    # Run this job on successful completion when a merge request event triggers the pipeline.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: on_success
+
+---
+
+# ====================================
+# Stage 3: Build Docker Image
+# Packages the application into a Docker Image and pushes it to GitLab Container Registry.
+# ====================================
+build_docker_image:
+  stage: build # Assigns this job to the 'build' stage.
+  image: docker:latest # Uses the latest Docker image, which includes the Docker CLI.
+  # Services define auxiliary Docker containers that are linked to the job container.
+  services:
+    # 'docker:dind' (Docker-in-Docker) is required to run Docker commands within the GitLab CI job.
+    - name: docker:dind
+      # Command to start the Docker daemon, with a specific insecure registry argument.
+      # Use `--insecure-registry` with caution, typically for local or trusted network registries.
+      # command: ["--insecure-registry=[GITLAB_DOMAIN]:5050"]
+  variables:
+    # Environment variables to configure Docker operations.
+
+    # Full name of the Docker image in the GitLab Container Registry.
+    # CI_REGISTRY is a built-in GitLab variable pointing to your project's registry.
+    # CI_PROJECT_PATH is a built-in variable containing the project's path (group/project-name).
+    DOCKER_IMAGE_NAME: $CI_REGISTRY/$CI_PROJECT_PATH
+
+    # Path to your Dockerfile. Defaults to the project root directory.
+    # If your Dockerfile is in a different directory (e.g., ./app/Dockerfile), change it here.
+    DOCKERFILE_PATH: Dockerfile
+
+    # Context for the Docker build. Defaults to the project root.
+    # If your build context is a subdirectory (e.g., ./app), change it here.
+    DOCKER_BUILD_CONTEXT: .
+
+    # Disables Docker TLS certificate verification.
+    # Use this option with EXTREME CAUTION as it reduces security.
+    DOCKER_TLS_CERTDIR: "" # Set empty to disable TLS verification.
+  script:
+    # 1. Log in to the GitLab Container Registry.
+    # CI_REGISTRY_USER and CI_REGISTRY_PASSWORD are built-in GitLab variables
+    # containing credentials to access the project's Container Registry.
+    - echo "Logging in to GitLab Container Registry..."
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+    # 2. Build the Docker image.
+    # The `docker build` command creates the image.
+    # -t: Assigns tags to the image.
+    #     - $DOCKER_IMAGE_NAME:$CI_COMMIT_SHORT_SHA: Tags with the short commit SHA (unique per commit).
+    #     - $DOCKER_IMAGE_NAME:$CI_COMMIT_REF_SLUG: Tags with the slugified branch/tag name.
+    # -f: Specifies the Dockerfile to use.
+    # $DOCKER_BUILD_CONTEXT: Specifies the build context.
+    - echo "Building Docker image..."
+    - docker build -t $DOCKER_IMAGE_NAME:$CI_COMMIT_SHORT_SHA -t $DOCKER_IMAGE_NAME:$CI_COMMIT_REF_SLUG -f $DOCKERFILE_PATH $DOCKER_BUILD_CONTEXT
+
+    # 3. Push the Docker image to the Container Registry.
+    # Push the image with the commit SHA tag.
+    - echo "Pushing Docker image with commit SHA tag ($CI_COMMIT_SHORT_SHA)..."
+    - docker push $DOCKER_IMAGE_NAME:$CI_COMMIT_SHORT_SHA
+
+    # Push the image with the ref slug tag.
+    - echo "Pushing Docker image with branch/tag slug tag ($CI_COMMIT_REF_SLUG)..."
+    - docker push $DOCKER_IMAGE_NAME:$CI_COMMIT_REF_SLUG
+
+    # 4. Special case: If on 'main' or 'master' branch, also push with 'latest' tag.
+    # This makes it easy to reference the most recent version of the application.
+    - | # The pipe symbol allows for multi-line shell commands.
+      if [ "$CI_COMMIT_REF_NAME" == "main" ] || [ "$CI_COMMIT_REF_NAME" == "master" ]; then
+        echo "Pushing Docker image with 'latest' tag..."
+        docker tag $DOCKER_IMAGE_NAME:$CI_COMMIT_SHORT_SHA $DOCKER_IMAGE_NAME:latest
+        docker push $DOCKER_IMAGE_NAME:latest
+      fi
+
+  # Rules for when this job runs.
+  # Only run this job for branches or tags.
+  # Do not run for merge requests or other pipeline sources.
+  rules:
+    - if: $CI_COMMIT_BRANCH || $CI_COMMIT_TAG
+
+# ====================================
+# Stage 4.1: Deploy to Development Kubernetes
+# Deploys the built Docker image to a Kubernetes cluster using a GitLab Agent.
+# ====================================
+deploy-to-development:
+  stage: deploy # Assigns this job to the 'deploy' stage.
+  image:
+    name: bitnami/kubectl:latest # Uses a lightweight image with kubectl installed.
+    entrypoint: [""]             # Overrides the default entrypoint to allow direct command execution.
+  variables:
+    # Variables for Kubernetes deployment.
+    DOCKER_IMAGE_NAME: $CI_REGISTRY/$CI_PROJECT_PATH # Base Docker image name.
+    DOCKER_IMAGE_TAG: $CI_COMMIT_SHORT_SHA         # Tag to use for the deployed image (short commit SHA for uniqueness).
+    KUBE_NAMESPACE: default                          # Kubernetes namespace to deploy into.
+    KUBE_AGENT_CONTEXT: "my-project/starter:development-agent" # Context name for the Kubernetes agent.
+    AGENT_ID: 1                                      # ID of the GitLab Kubernetes Agent.
+    K8S_PROXY_URL: https://[GITLAB_DOMAIN]/-/kubernetes-agent/k8s-proxy/ # URL for the Kubernetes API proxy via the GitLab Agent.
+  before_script:
+    # Commands to run before the main script, typically for setup.
+    # Configure kubectl to authenticate with the GitLab Agent.
+    - kubectl config set-credentials agent:$AGENT_ID --token="ci:${AGENT_ID}:${CI_JOB_TOKEN}"
+    # Configure the Kubernetes cluster entrypoint via the GitLab Agent proxy.
+    - kubectl config set-cluster gitlab --server="${K8S_PROXY_URL}" --insecure-skip-tls-verify=true
+    # Set the current context to use the GitLab Agent for communication.
+    - kubectl config set-context "$KUBE_AGENT_CONTEXT" --cluster=gitlab --user="agent:${AGENT_ID}"
+    # Use the configured context.
+    - kubectl config use-context "$KUBE_AGENT_CONTEXT"
+  script:
+    - echo "Deploying to Kubernetes via GitLab Agent..."
+    - echo "Updating Deployment image to $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG..."
+    # Replace placeholders in Kubernetes manifest files with actual image name and tag.
+    - sed -i "s|__IMAGE_NAME_PLACEHOLDER__|$DOCKER_IMAGE_NAME|g" kubernetes/development/deployment.yaml
+    - sed -i "s|__IMAGE_TAG_PLACEHOLDER__|$DOCKER_IMAGE_TAG|g" kubernetes/development/deployment.yaml
+    # Apply Kubernetes deployment, service, and ingress manifests.
+    # --validate=false and --insecure-skip-tls-verify=true are used here, but should be used with caution
+    # and preferably avoided in development environments for security reasons.
+    - kubectl apply -f kubernetes/development/deployment.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
+    - kubectl apply -f kubernetes/development/service.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
+    - kubectl apply -f kubernetes/development/ingress.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
+    - echo "Waiting for Deployment rollout to complete..."
+    # Wait for the Kubernetes deployment to be successfully rolled out.
+    - kubectl rollout status deployment/development-starter -n $KUBE_NAMESPACE
+    - echo "Deployment completed successfully for deployment/development-starter in namespace $KUBE_NAMESPACE."
+  rules:
+    # Only run this job when changes are pushed to the default branch (e.g., 'main' or 'master').
+    # This typically means automatic deployment on successful merges to the main development line.
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "dev"
+      when: on_success
+
+---
+
+# ====================================
+# Stage 4.2: Deploy to Production Kubernetes
+# Deploys the built Docker image to a Kubernetes cluster using a GitLab Agent.
+# ====================================
+deploy-to-production:
+  stage: deploy # Assigns this job to the 'deploy' stage.
+  image:
+    name: bitnami/kubectl:latest # Uses a lightweight image with kubectl installed.
+    entrypoint: [""]             # Overrides the default entrypoint to allow direct command execution.
+  variables:
+    # Variables for Kubernetes deployment.
+    DOCKER_IMAGE_NAME: $CI_REGISTRY/$CI_PROJECT_PATH # Base Docker image name.
+    DOCKER_IMAGE_TAG: $CI_COMMIT_SHORT_SHA         # Tag to use for the deployed image (short commit SHA for uniqueness).
+    KUBE_NAMESPACE: default                          # Kubernetes namespace to deploy into.
+    KUBE_AGENT_CONTEXT: "my-project/starter:production-agent" # Context name for the Kubernetes agent.
+    AGENT_ID: 1                                      # ID of the GitLab Kubernetes Agent.
+    K8S_PROXY_URL: https://[GITLAB_DOMAIN]/-/kubernetes-agent/k8s-proxy/ # URL for the Kubernetes API proxy via the GitLab Agent.
+  before_script:
+    # Commands to run before the main script, typically for setup.
+    # Configure kubectl to authenticate with the GitLab Agent.
+    - kubectl config set-credentials agent:$AGENT_ID --token="ci:${AGENT_ID}:${CI_JOB_TOKEN}"
+    # Configure the Kubernetes cluster entrypoint via the GitLab Agent proxy.
+    - kubectl config set-cluster gitlab --server="${K8S_PROXY_URL}" --insecure-skip-tls-verify=true
+    # Set the current context to use the GitLab Agent for communication.
+    - kubectl config set-context "$KUBE_AGENT_CONTEXT" --cluster=gitlab --user="agent:${AGENT_ID}"
+    # Use the configured context.
+    - kubectl config use-context "$KUBE_AGENT_CONTEXT"
+  script:
+    - echo "Deploying to Kubernetes via GitLab Agent..."
+    - echo "Updating Deployment image to $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG..."
+    # Replace placeholders in Kubernetes manifest files with actual image name and tag.
+    - sed -i "s|__IMAGE_NAME_PLACEHOLDER__|$DOCKER_IMAGE_NAME|g" kubernetes/production/deployment.yaml
+    - sed -i "s|__IMAGE_TAG_PLACEHOLDER__|$DOCKER_IMAGE_TAG|g" kubernetes/production/deployment.yaml
+    # Apply Kubernetes deployment, service, and ingress manifests.
+    # --validate=false and --insecure-skip-tls-verify=true are used here, but should be used with caution
+    # and preferably avoided in production environments for security reasons.
+    - kubectl apply -f kubernetes/production/deployment.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
+    - kubectl apply -f kubernetes/production/service.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
+    - kubectl apply -f kubernetes/production/ingress.yaml -n $KUBE_NAMESPACE --validate=false --insecure-skip-tls-verify=true
+    - echo "Waiting for Deployment rollout to complete..."
+    # Wait for the Kubernetes deployment to be successfully rolled out.
+    - kubectl rollout status deployment/production-starter -n $KUBE_NAMESPACE
+    - echo "Deployment completed successfully for deployment/production-starter in namespace $KUBE_NAMESPACE."
+  rules:
+    # Only run this job when changes are pushed to the default branch (e.g., 'main' or 'master').
+    # This typically means automatic deployment on successful merges to the main development line.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH # Default branch is usually 'main' or 'master'.
+      when: on_success
