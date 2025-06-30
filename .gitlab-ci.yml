@@ -12,8 +12,6 @@ stages:
 default:
   image: node:lts-alpine
 
----
-
 # ====================================
 # Stage 1: Linting
 # Checks code formatting and quality.
@@ -35,8 +33,6 @@ lint_code:
   allow_failure: true # Allows this job to fail without stopping the entire pipeline.
                       # Useful for non-critical checks that shouldn't block deployment.
 
----
-
 # ====================================
 # Stage 2: Testing
 # Runs automated tests.
@@ -54,8 +50,6 @@ run_tests:
     # Run this job on successful completion when a merge request event triggers the pipeline.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: on_success
-
----
 
 # ====================================
 # Stage 3: Build Docker Image
@@ -183,8 +177,6 @@ deploy_to_dev:
     - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "dev"
       when: on_success
 
----
-
 # ====================================
 # Stage 4.2: Deploy to Production Kubernetes
 # Deploys the built Docker image to a Kubernetes cluster using a GitLab Agent.
@@ -236,5 +228,3 @@ deploy_to_prod:
     # This typically means automatic deployment on successful merges to the main development line.
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH # Default branch is usually 'main' or 'master'.
       when: manual
-      allow_failure: fail # Allows this job to fail without stopping the pipeline.
-      protected: true # Ensures this job only runs on protected branches.
